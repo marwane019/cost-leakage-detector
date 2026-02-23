@@ -1,0 +1,144 @@
+# =============================================================================
+# Operations Cost Leakage Detector — Configuration
+# All runtime parameters live here. No hardcoded values in source code.
+# =============================================================================
+
+project:
+  name: "Operations Cost Leakage Detector"
+  version: "1.0.0"
+  organisation: "Acme Operations Ltd"
+  currency: "GBP"
+
+# ---------------------------------------------------------------------------
+# Data paths
+# ---------------------------------------------------------------------------
+paths:
+  raw_data:        "data/raw/transactions.csv"
+  output_dir:      "data/output"
+  log_dir:         "logs"
+  report_filename: "leakage_report_{date}.xlsx"
+  dashboard_filename: "leakage_dashboard_{date}.html"
+
+# ---------------------------------------------------------------------------
+# Data generation parameters (data_generator.py)
+# ---------------------------------------------------------------------------
+data_generation:
+  days_history: 90
+  seed: 42
+  transactions_per_day_mean: 45
+  transactions_per_day_std: 12
+  suppliers:
+    - id: "SUP001"
+      name: "Apex Logistics Ltd"
+      category: "Logistics"
+      baseline_rate: 1250.00
+    - id: "SUP002"
+      name: "Sterling Facilities Group"
+      category: "Facilities"
+      baseline_rate: 890.00
+    - id: "SUP003"
+      name: "Meridian IT Services"
+      category: "IT"
+      baseline_rate: 3400.00
+    - id: "SUP004"
+      name: "Ironside Manufacturing"
+      category: "Manufacturing"
+      baseline_rate: 7800.00
+    - id: "SUP005"
+      name: "BlueWave Consulting"
+      category: "Professional Services"
+      baseline_rate: 5200.00
+    - id: "SUP006"
+      name: "Pinnacle Procurement Co"
+      category: "Procurement"
+      baseline_rate: 2100.00
+    - id: "SUP007"
+      name: "Vertex Maintenance Services"
+      category: "Facilities"
+      baseline_rate: 640.00
+    - id: "SUP008"
+      name: "NorthStar Freight"
+      category: "Logistics"
+      baseline_rate: 1850.00
+  sla_days_map:
+    Logistics: 3
+    Facilities: 5
+    IT: 2
+    Manufacturing: 7
+    "Professional Services": 4
+    Procurement: 3
+  # Anomaly injection rates (proportion of transactions)
+  anomaly_rates:
+    duplicate_rate: 0.025       # ~2.5% duplicates
+    price_overcharge_rate: 0.03 # ~3% price spikes
+    sla_breach_rate: 0.04       # ~4% late deliveries
+    volume_spike_days: 5        # inject 5 spike days
+
+# ---------------------------------------------------------------------------
+# Detection engine thresholds (detector.py)
+# ---------------------------------------------------------------------------
+detection:
+  # Rule 1: Duplicate detection window (days)
+  duplicate_window_days: 1
+  # Rule 2: Price variance — flag if invoice > baseline * threshold
+  price_variance_threshold: 1.15   # 15% over baseline
+  # Rule 3: SLA breach — flag if actual_delivery > expected + grace_days
+  sla_grace_days: 0
+  # Rule 4: Volume spike — flag days where txn count > mean + N sigma
+  volume_spike_sigma: 2.0
+  # Rolling window for volume baseline
+  volume_rolling_window: 14
+
+# ---------------------------------------------------------------------------
+# Scoring engine weights (scorer.py)
+# ---------------------------------------------------------------------------
+scoring:
+  # Base severity scores per rule (0-100)
+  rule_base_scores:
+    duplicate: 70
+    price_variance: 60
+    sla_breach: 45
+    volume_spike: 40
+  # Financial impact multipliers
+  financial_multipliers:
+    low_threshold: 500        # GBP
+    medium_threshold: 2000
+    high_threshold: 10000
+  # Final severity bands
+  severity_bands:
+    critical: 80
+    high: 60
+    medium: 35
+    low: 0
+
+# ---------------------------------------------------------------------------
+# Reporting (reporter.py)
+# ---------------------------------------------------------------------------
+reporting:
+  excel_tab_colors:
+    summary: "1F4E79"
+    flagged: "C00000"
+    statistics: "375623"
+  max_rows_detail_sheet: 5000
+
+# ---------------------------------------------------------------------------
+# Alerting (alerter.py)
+# ---------------------------------------------------------------------------
+alerting:
+  # Minimum severity to trigger Slack alert
+  alert_severity_threshold: "Critical"
+  # Slack webhook URL loaded from .env (SLACK_WEBHOOK_URL)
+  slack_channel: "#ops-alerts"
+  slack_username: "CostLeakageBot"
+  slack_icon_emoji: ":rotating_light:"
+
+# ---------------------------------------------------------------------------
+# Scheduler (scheduler.py)
+# ---------------------------------------------------------------------------
+scheduler:
+  # Daily run time (24h format)
+  run_time: "07:00"
+  timezone: "Europe/London"
+  # Retry on failure
+  max_retries: 3
+  retry_delay_seconds: 300

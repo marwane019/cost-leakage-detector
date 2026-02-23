@@ -1,0 +1,31 @@
+# =============================================================================
+# Operations Cost Leakage Detector — Python Dependencies
+# Install with: pip install -r requirements.txt
+# Tested on Python 3.11+
+# =============================================================================
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.26.0
+
+# Configuration
+PyYAML>=6.0.1
+
+# Excel report generation
+openpyxl>=3.1.2
+
+# Interactive dashboard
+plotly>=5.18.0
+
+# HTTP requests (Slack webhook)
+requests>=2.31.0
+
+# Scheduling
+APScheduler>=3.10.4
+
+# Environment variable loading (optional — alerter.py has a manual fallback)
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0

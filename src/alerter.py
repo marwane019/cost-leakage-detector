@@ -1,0 +1,291 @@
+"""
+alerter.py — Slack Webhook Alerter.
+
+Sends a rich Block Kit Slack notification when Critical-severity leakage is
+detected. Designed to integrate with existing ops-alert channels.
+
+Features:
+    - Block Kit formatted messages with severity colour coding
+    - Summary statistics in the alert body
+    - Top 3 Critical items listed with transaction IDs and leakage amounts
+    - Dry-run mode when no SLACK_WEBHOOK_URL is set (logs message instead)
+    - Retry logic with exponential back-off
+
+Usage:
+    from src.alerter import send_alert
+    send_alert(scored, summary, config_path="config.yaml")
+"""
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+import requests
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_SLACK_COLOUR_MAP = {
+    "Critical": "#C00000",
+    "High":     "#C65911",
+    "Medium":   "#BF8F00",
+    "Low":      "#375623",
+}
+
+
+def _load_webhook_url() -> str | None:
+    """Read the Slack webhook URL from environment variables.
+
+    Checks for SLACK_WEBHOOK_URL in the environment. Falls back to loading
+    a .env file if present (python-dotenv not required — manual parse).
+
+    Returns:
+        Webhook URL string if found, else None.
+    """
+    url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+    if url:
+        return url
+
+    # Manual .env fallback (no extra deps)
+    env_path = Path(".env")
+    if env_path.exists():
+        with open(env_path, "r") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("SLACK_WEBHOOK_URL="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if val:
+                        return val
+    return None
+
+
+def _build_slack_payload(
+    scored_df,
+    summary: dict[str, Any],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Construct a Slack Block Kit payload for the leakage alert.
+
+    The payload includes:
+        - Header block with severity icon
+        - KPI fields: total leakage, critical count, date range
+        - Top 3 Critical flagged items as a bulleted section
+        - Divider and footer with run metadata
+
+    Args:
+        scored_df: Scored DataFrame (used to extract top Critical items).
+        summary: Executive summary dict from scorer.build_executive_summary().
+        cfg: Full configuration dict.
+
+    Returns:
+        Slack Block Kit payload as a Python dict (JSON-serialisable).
+    """
+    alert_cfg = cfg["alerting"]
+    org_name = cfg["project"]["organisation"]
+    sev = summary["severity_breakdown"]
+    critical_count = sev.get("Critical", 0)
+    high_count = sev.get("High", 0)
+
+    # Top 3 Critical items
+    critical_items = (
+        scored_df[scored_df["severity"] == "Critical"]
+        .sort_values("leakage_amount_gbp", ascending=False)
+        .head(3)
+    )
+
+    top_items_text = ""
+    for _, row in critical_items.iterrows():
+        top_items_text += (
+            f"• *{row.get('transaction_id', 'N/A')}* | "
+            f"{row.get('supplier_name', 'Unknown')} | "
+            f"Rule: `{row.get('rule_triggered', 'N/A')}` | "
+            f"Est. leakage: *£{row.get('leakage_amount_gbp', 0):,.2f}*\n"
+        )
+
+    if not top_items_text:
+        top_items_text = "_No Critical items to display._"
+
+    date_range = (
+        f"{summary['date_range']['start']} → {summary['date_range']['end']}"
+    )
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f":rotating_light: CRITICAL: Cost Leakage Detected — {org_name}",
+                "emoji": True,
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "fields": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Total Estimated Leakage:*\n:money_with_wings: *£{summary['headline_gbp']:,.2f}*",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Critical Flags:*\n:red_circle: *{critical_count}*  |  :large_orange_circle: High: {high_count}",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Transactions Analysed:*\n{summary['total_transactions_analysed']:,}",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Analysis Period:*\n{date_range}",
+                },
+            ],
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Top Critical Findings:*\n{top_items_text}",
+            },
+        },
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        ":information_source: Generated by *Operations Cost Leakage Detector v1.0* | "
+                        f"Channel: {alert_cfg['slack_channel']} | "
+                        "Action required: Review flagged items in today's Excel report."
+                    ),
+                }
+            ],
+        },
+    ]
+
+    payload = {
+        "username": alert_cfg["slack_username"],
+        "icon_emoji": alert_cfg["slack_icon_emoji"],
+        "channel": alert_cfg["slack_channel"],
+        "attachments": [
+            {
+                "color": _SLACK_COLOUR_MAP["Critical"],
+                "blocks": blocks,
+            }
+        ],
+    }
+    return payload
+
+
+def _post_with_retry(
+    webhook_url: str,
+    payload: dict[str, Any],
+    max_retries: int = 3,
+    base_delay: float = 2.0,
+) -> bool:
+    """POST the payload to Slack with exponential back-off retry.
+
+    Args:
+        webhook_url: Slack incoming webhook URL.
+        payload: JSON-serialisable Block Kit payload.
+        max_retries: Maximum number of attempts. Defaults to 3.
+        base_delay: Initial retry delay in seconds. Doubles each attempt.
+
+    Returns:
+        True if the message was delivered successfully, False otherwise.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                timeout=10,
+                headers={"Content-Type": "application/json"},
+            )
+            if response.status_code == 200 and response.text == "ok":
+                logger.info(
+                    "Slack alert delivered successfully (attempt %d)", attempt
+                )
+                return True
+            else:
+                logger.warning(
+                    "Slack returned non-OK response (attempt %d): %s — %s",
+                    attempt,
+                    response.status_code,
+                    response.text,
+                )
+        except requests.exceptions.Timeout:
+            logger.warning("Slack POST timed out (attempt %d)", attempt)
+        except requests.exceptions.ConnectionError as exc:
+            logger.warning("Slack connection error (attempt %d): %s", attempt, exc)
+
+        if attempt < max_retries:
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.info("Retrying Slack alert in %.0fs...", delay)
+            time.sleep(delay)
+
+    logger.error("Slack alert failed after %d attempts", max_retries)
+    return False
+
+
+def send_alert(
+    scored_df,
+    summary: dict[str, Any],
+    config_path: str = "config.yaml",
+) -> bool:
+    """Send a Slack alert if Critical-severity findings are present.
+
+    Checks the configured alert_severity_threshold. If Critical findings
+    exist, builds the Block Kit payload and posts to the webhook. Falls
+    back to a dry-run log message if no webhook URL is configured.
+
+    Args:
+        scored_df: Scored DataFrame from scorer.score_flagged_transactions().
+        summary: Executive summary dict.
+        config_path: Path to configuration YAML.
+
+    Returns:
+        True if alert was sent (or dry-run logged), False if delivery failed.
+    """
+    with open(config_path, "r") as fh:
+        cfg = yaml.safe_load(fh)
+
+    threshold = cfg["alerting"]["alert_severity_threshold"]
+    critical_count = summary["severity_breakdown"].get(threshold, 0)
+
+    if critical_count == 0:
+        logger.info(
+            "No %s findings detected — Slack alert not required", threshold
+        )
+        return True
+
+    logger.info(
+        "%d %s finding(s) detected — preparing Slack alert",
+        critical_count,
+        threshold,
+    )
+
+    payload = _build_slack_payload(scored_df, summary, cfg)
+    webhook_url = _load_webhook_url()
+
+    if not webhook_url:
+        # Dry-run mode: log the payload for development/testing
+        logger.warning(
+            "SLACK_WEBHOOK_URL not set — dry-run mode. "
+            "Payload that would have been sent:\n%s",
+            json.dumps(payload, indent=2),
+        )
+        print("\n" + "=" * 60)
+        print("DRY-RUN: Slack Alert Payload (set SLACK_WEBHOOK_URL to send)")
+        print("=" * 60)
+        print(f"  Critical flags:    {critical_count}")
+        print(f"  Total leakage:     £{summary['headline_gbp']:,.2f}")
+        print(f"  Channel:           {cfg['alerting']['slack_channel']}")
+        print("=" * 60 + "\n")
+        return True
+
+    return _post_with_retry(webhook_url, payload)

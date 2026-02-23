@@ -1,0 +1,241 @@
+{
+  "name": "Cost Leakage Detector — Daily Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily Trigger (Mon–Fri 07:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Triggers Mon–Fri at 07:00 London time. Adjust cron expression or timezone in n8n settings."
+    },
+    {
+      "parameters": {
+        "command": "cd /path/to/cost-leakage-detector && python main.py --full-run --config config.yaml"
+      },
+      "id": "run-pipeline",
+      "name": "Run Detection Pipeline",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [480, 300],
+      "notes": "Update the path to match your deployment directory."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $node[\"Run Detection Pipeline\"].json[\"exitCode\"] }}",
+              "operation": "equal",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "check-exit-code",
+      "name": "Pipeline Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "text",
+              "value": ":white_check_mark: *Cost Leakage Detector* pipeline completed successfully at {{ $now.toISO() }}. Check #ops-alerts for Critical findings."
+            }
+          ]
+        },
+        "method": "POST",
+        "responseFormat": "string"
+      },
+      "id": "slack-success",
+      "name": "Slack: Pipeline OK",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 200],
+      "notes": "Optional success notification. Remove if channel is too noisy."
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "text",
+              "value": ":x: *Cost Leakage Detector* pipeline FAILED at {{ $now.toISO() }}. Exit code: {{ $node[\"Run Detection Pipeline\"].json[\"exitCode\"] }}. Stderr: {{ $node[\"Run Detection Pipeline\"].json[\"stderr\"] }}"
+            }
+          ]
+        },
+        "method": "POST",
+        "responseFormat": "string"
+      },
+      "id": "slack-failure",
+      "name": "Slack: Pipeline FAILED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 400],
+      "notes": "Sends to Slack if the Python pipeline exits non-zero."
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "text",
+              "value": ":rotating_light: *CRITICAL* leakage flags detected. Review the Excel report in data/output/ immediately."
+            }
+          ]
+        },
+        "method": "POST",
+        "responseFormat": "string"
+      },
+      "id": "slack-critical-alert",
+      "name": "Slack: Critical Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 560],
+      "notes": "Separate critical alert node — triggered when stdout contains CRITICAL keyword."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $node[\"Run Detection Pipeline\"].json[\"stdout\"] }}",
+              "operation": "contains",
+              "value2": "Critical"
+            }
+          ]
+        }
+      },
+      "id": "check-critical",
+      "name": "Critical Findings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Daily Trigger (Mon–Fri 07:00)": {
+      "main": [
+        [
+          {
+            "node": "Run Detection Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Detection Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Pipeline Succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline Succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Slack: Pipeline OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Critical Findings?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack: Pipeline FAILED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical Findings?": {
+      "main": [
+        [
+          {
+            "node": "Slack: Critical Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "description": "Daily scheduled run of the Operations Cost Leakage Detector pipeline. Triggers Mon-Fri at 07:00, executes the Python detection pipeline, then sends Slack alerts on success/failure and for Critical findings. Import this workflow into your n8n instance and set the SLACK_WEBHOOK_URL environment variable."
+  },
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 0,
+  "tags": [
+    {"name": "operations"},
+    {"name": "automation"},
+    {"name": "cost-leakage"},
+    {"name": "daily-schedule"}
+  ]
+}
