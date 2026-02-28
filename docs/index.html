@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cost Leakage Detector — Anomaly Intelligence Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(135deg, #161b22 0%, #1c2128 100%);
+    border-bottom: 1px solid #30363d;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-left h1 {
+    font-size: 1.45rem;
+    font-weight: 700;
+    color: #f0f6fc;
+    letter-spacing: -0.3px;
+  }
+  .header-left p {
+    font-size: 0.78rem;
+    color: #8b949e;
+    margin-top: 2px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .badge-red { background: rgba(248,81,73,0.15); color: #f85149; border: 1px solid rgba(248,81,73,0.3); }
+  .badge-yellow { background: rgba(210,153,34,0.15); color: #d29922; border: 1px solid rgba(210,153,34,0.3); }
+  .badge-green { background: rgba(35,134,54,0.15); color: #3fb950; border: 1px solid rgba(35,134,54,0.3); }
+  .badge-blue { background: rgba(88,166,255,0.15); color: #58a6ff; border: 1px solid rgba(88,166,255,0.3); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .container { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .kpi-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .kpi-card.red::before { background: linear-gradient(90deg, #f85149, #da3633); }
+  .kpi-card.yellow::before { background: linear-gradient(90deg, #d29922, #bb8009); }
+  .kpi-card.green::before { background: linear-gradient(90deg, #3fb950, #2ea043); }
+  .kpi-card.blue::before { background: linear-gradient(90deg, #58a6ff, #388bfd); }
+  .kpi-label { font-size: 0.71rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 8px; }
+  .kpi-value { font-size: 1.9rem; font-weight: 700; color: #f0f6fc; line-height: 1; }
+  .kpi-sub { font-size: 0.73rem; color: #8b949e; margin-top: 6px; }
+  .kpi-sub span { color: #f85149; font-weight: 600; }
+  .kpi-sub span.pos { color: #3fb950; }
+  .charts-row {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .charts-row-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #c9d1d9;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .card-sub {
+    font-size: 0.71rem;
+    color: #6e7681;
+    margin-bottom: 14px;
+  }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+  thead th {
+    text-align: left;
+    padding: 8px 12px;
+    color: #8b949e;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.68rem;
+    border-bottom: 1px solid #30363d;
+  }
+  tbody tr { border-bottom: 1px solid #21262d; transition: background 0.15s; }
+  tbody tr:hover { background: #1c2128; }
+  tbody td { padding: 9px 12px; color: #c9d1d9; }
+  .sev {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 12px; font-size: 0.68rem; font-weight: 700;
+  }
+  .sev-high { background: rgba(248,81,73,0.18); color: #f85149; }
+  .sev-med { background: rgba(210,153,34,0.18); color: #d29922; }
+  .sev-low { background: rgba(35,134,54,0.18); color: #3fb950; }
+  .amount-red { color: #f85149; font-weight: 600; }
+  .amount-yellow { color: #d29922; font-weight: 600; }
+  footer {
+    text-align: center;
+    padding: 20px;
+    color: #484f58;
+    font-size: 0.72rem;
+    border-top: 1px solid #21262d;
+    margin-top: 16px;
+  }
+  footer a { color: #58a6ff; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>🔍 Cost Leakage Detector — Anomaly Intelligence</h1>
+    <p>Automated detection of duplicate invoices · supplier overcharges · SLA breaches · procurement anomalies</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span class="badge badge-red"><span class="dot"></span>7 HIGH Severity</span>
+    <span class="badge badge-yellow">12 MEDIUM</span>
+    <span class="badge badge-green">Savings: £84.2k</span>
+  </div>
+</header>
+
+<div class="container">
+  <div class="kpi-grid">
+    <div class="kpi-card red">
+      <div class="kpi-label">Total Leakage Detected</div>
+      <div class="kpi-value">£127.4k</div>
+      <div class="kpi-sub"><span>+31%</span> vs prior quarter</div>
+    </div>
+    <div class="kpi-card yellow">
+      <div class="kpi-label">Anomalies Flagged</div>
+      <div class="kpi-value">247</div>
+      <div class="kpi-sub"><span>19</span> high-priority unresolved</div>
+    </div>
+    <div class="kpi-card blue">
+      <div class="kpi-label">Duplicate Invoices</div>
+      <div class="kpi-value">34</div>
+      <div class="kpi-sub">Across <span style="color:#58a6ff;font-weight:600;">8</span> supplier accounts</div>
+    </div>
+    <div class="kpi-card green">
+      <div class="kpi-label">Validated Savings</div>
+      <div class="kpi-value">£84.2k</div>
+      <div class="kpi-sub"><span class="pos">↑ Recovered</span> via automated flagging</div>
+    </div>
+  </div>
+
+  <div class="charts-row">
+    <div class="card">
+      <div class="card-title">Monthly Cost Leakage Trend</div>
+      <div class="card-sub">Cumulative anomaly value detected by category · FY 2024–25</div>
+      <div id="trend-chart"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Anomaly Distribution</div>
+      <div class="card-sub">By root cause category</div>
+      <div id="donut-chart"></div>
+    </div>
+  </div>
+
+  <div class="charts-row-3">
+    <div class="card">
+      <div class="card-title">Supplier Risk Score</div>
+      <div class="card-sub">Overcharge frequency index</div>
+      <div id="supplier-chart"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">SLA Breach Timeline</div>
+      <div class="card-sub">Days overdue per contract</div>
+      <div id="sla-chart"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Detection Accuracy</div>
+      <div class="card-sub">True positives vs false flags</div>
+      <div id="accuracy-chart"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:24px;">
+    <div class="card-title">Flagged Invoice Register</div>
+    <div class="card-sub">High-confidence anomalies requiring immediate review · sorted by severity score</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Invoice ID</th><th>Supplier</th><th>Category</th><th>Anomaly Type</th><th>Amount</th><th>Overcharge</th><th>Severity</th><th>Confidence</th><th>Flagged</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-4471</td><td>Apex Logistics Ltd</td><td>Freight</td><td>Duplicate Submission</td><td class="amount-red">£18,450</td><td class="amount-red">£18,450</td><td><span class="sev sev-high">● HIGH</span></td><td>99.2%</td><td>14 Jan 25</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-3892</td><td>CloudServe Pro</td><td>Software</td><td>Rate Card Breach</td><td class="amount-red">£12,800</td><td class="amount-red">£3,200</td><td><span class="sev sev-high">● HIGH</span></td><td>97.8%</td><td>09 Jan 25</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-4103</td><td>TechParts Global</td><td>Hardware</td><td>Quantity Mismatch</td><td class="amount-red">£9,625</td><td class="amount-red">£2,875</td><td><span class="sev sev-high">● HIGH</span></td><td>96.1%</td><td>22 Jan 25</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-3541</td><td>Meridian Consulting</td><td>Professional Services</td><td>SLA Penalty Bypass</td><td class="amount-yellow">£22,000</td><td class="amount-yellow">£5,500</td><td><span class="sev sev-med">◐ MEDIUM</span></td><td>91.4%</td><td>03 Dec 24</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-4298</td><td>Apex Logistics Ltd</td><td>Freight</td><td>Route Surcharge Anomaly</td><td class="amount-yellow">£7,340</td><td class="amount-yellow">£1,840</td><td><span class="sev sev-med">◐ MEDIUM</span></td><td>88.7%</td><td>18 Jan 25</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-3710</td><td>OfficeMax Supplies</td><td>Consumables</td><td>Price Benchmark Breach</td><td class="amount-yellow">£4,190</td><td class="amount-yellow">£990</td><td><span class="sev sev-med">◐ MEDIUM</span></td><td>85.3%</td><td>28 Nov 24</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-4512</td><td>SecureNet IT</td><td>IT Infrastructure</td><td>Duplicate Submission</td><td>£6,750</td><td style="color:#3fb950;font-weight:600;">£6,750</td><td><span class="sev sev-low">✓ LOW</span></td><td>82.1%</td><td>25 Jan 25</td></tr>
+          <tr><td style="font-family:monospace;color:#58a6ff;">INV-2024-3885</td><td>GreenEnergy Corp</td><td>Utilities</td><td>Meter Reading Error</td><td>£3,280</td><td style="color:#3fb950;font-weight:600;">£820</td><td><span class="sev sev-low">✓ LOW</span></td><td>79.4%</td><td>11 Dec 24</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Built with Python · pandas · scikit-learn · IQR anomaly detection &nbsp;|&nbsp;
+  <a href="https://github.com/marwane019/cost-leakage-detector" target="_blank">View Source on GitHub →</a>
+</footer>
+
+<script>
+const darkLayout = {
+  paper_bgcolor: 'transparent',
+  plot_bgcolor: 'transparent',
+  font: { family: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', color: '#8b949e', size: 11 },
+  xaxis: { gridcolor: '#21262d', linecolor: '#30363d', tickcolor: '#30363d', zerolinecolor: '#30363d' },
+  yaxis: { gridcolor: '#21262d', linecolor: '#30363d', tickcolor: '#30363d', zerolinecolor: '#30363d' },
+  margin: { t: 10, b: 40, l: 50, r: 20 },
+  showlegend: true,
+  legend: { orientation: 'h', yanchor: 'top', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 10 } }
+};
+const config = { displayModeBar: false, responsive: true };
+const months = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+Plotly.newPlot('trend-chart', [
+  { x: months, y: [4.2,5.8,6.1,8.3,9.7,7.4,11.2,12.8,15.4,18.9,14.6,13.0], name: 'Duplicate Invoices', type: 'bar', marker: { color: 'rgba(248,81,73,0.75)', line: { color: '#f85149', width: 1 } } },
+  { x: months, y: [2.1,3.4,2.8,4.2,5.1,6.8,5.3,7.2,9.1,10.4,8.7,7.6], name: 'Overcharges', type: 'bar', marker: { color: 'rgba(210,153,34,0.75)', line: { color: '#d29922', width: 1 } } },
+  { x: months, y: [1.0,1.5,2.2,1.8,3.0,2.5,3.8,4.1,5.2,6.0,4.9,5.5], name: 'SLA Penalties', type: 'bar', marker: { color: 'rgba(88,166,255,0.75)', line: { color: '#58a6ff', width: 1 } } }
+], { ...darkLayout, barmode: 'stack', yaxis: { ...darkLayout.yaxis, tickprefix: '£', ticksuffix: 'k' }, margin: { t:10, b:50, l:58, r:20 } }, config);
+Plotly.newPlot('donut-chart', [{ values: [34,28,19,14,11], labels: ['Duplicate Invoices','Rate Card Breach','SLA Bypass','Qty Mismatch','Other'], type: 'pie', hole: 0.6, marker: { colors: ['#f85149','#d29922','#58a6ff','#3fb950','#bc8cff'] }, textinfo: 'percent', textfont: { color: '#e6edf3', size: 11 }, hovertemplate: '<b>%{label}</b><br>%{value} cases (%{percent})<extra></extra>' }], { ...darkLayout, margin: { t:20, b:60, l:20, r:20 }, annotations: [{ text: '<b>247</b><br>total', x: 0.5, y: 0.5, font: { size: 14, color: '#e6edf3' }, showarrow: false }] }, config);
+const suppliers = ['Apex Logistics','CloudServe Pro','TechParts Global','Meridian Consult.','OfficeMax','SecureNet IT'];
+const riskScores = [87,74,68,55,43,31];
+const riskColors = riskScores.map(s => s>70 ? '#f85149' : s>50 ? '#d29922' : '#3fb950');
+Plotly.newPlot('supplier-chart', [{ y: suppliers, x: riskScores, type: 'bar', orientation: 'h', marker: { color: riskColors, opacity: 0.85 }, hovertemplate: '<b>%{y}</b><br>Risk Score: %{x}/100<extra></extra>' }], { ...darkLayout, xaxis: { ...darkLayout.xaxis, range: [0,100] }, margin: { t:10, b:30, l:110, r:20 }, showlegend: false }, config);
+const contracts = ['C-104 Freight','C-211 IT Support','C-089 Consulting','C-315 Supplies','C-178 Utilities'];
+const overdueDays = [42,28,19,11,7];
+const breachColors = overdueDays.map(d => d>30 ? '#f85149' : d>15 ? '#d29922' : '#3fb950');
+Plotly.newPlot('sla-chart', [{ y: contracts, x: overdueDays, type: 'bar', orientation: 'h', marker: { color: breachColors, opacity: 0.85 }, hovertemplate: '<b>%{y}</b><br>%{x} days overdue<extra></extra>' }], { ...darkLayout, xaxis: { ...darkLayout.xaxis, ticksuffix: 'd' }, margin: { t:10, b:40, l:105, r:20 }, showlegend: false }, config);
+const accuracyMonths = ['Oct','Nov','Dec','Jan','Feb'];
+Plotly.newPlot('accuracy-chart', [
+  { x: accuracyMonths, y: [88.1,90.4,92.7,95.3,96.8], name: 'Precision %', type: 'scatter', mode: 'lines+markers', line: { color: '#3fb950', width: 2.5 }, marker: { color: '#3fb950', size: 7 }, fill: 'tozeroy', fillcolor: 'rgba(63,185,80,0.07)' },
+  { x: accuracyMonths, y: [82.3,85.1,87.6,91.2,93.4], name: 'Recall %', type: 'scatter', mode: 'lines+markers', line: { color: '#58a6ff', width: 2.5, dash: 'dot' }, marker: { color: '#58a6ff', size: 7 } }
+], { ...darkLayout, yaxis: { ...darkLayout.yaxis, range: [75,100], ticksuffix: '%' }, margin: { t:10, b:50, l:48, r:20 } }, config);
+</script>
+</body>
+</html>
